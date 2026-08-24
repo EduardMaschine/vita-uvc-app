@@ -164,5 +164,17 @@ xerpi, for the [udcd_uvc plugin](https://github.com/xerpi/vita-udcd-uvc)
 
 SilentNightx, for the [vitadock plus](https://github.com/SilentNightx/VitaDockPlus) and the community around this for the great contact and the whole existence in general
 
+# Screenshots
+<img width="3840" height="2160" alt="Screenshot 2026-08-24 15-37-12" src="https://github.com/user-attachments/assets/648e06e8-a621-4087-a953-611d6327dcb3" />
+
+<img width="3840" height="2160" alt="Screenshot 2026-08-24 15-40-05" src="https://github.com/user-attachments/assets/8d925fe4-04fa-4e40-822b-d6317ee54dd5" />
+
+<img width="3840" height="2160" alt="Screenshot 2026-08-24 15-34-09" src="https://github.com/user-attachments/assets/3871a3b7-16c1-4c51-9cbc-4ab9f4e07fb9" />
+
+<img width="3840" height="2160" alt="Screenshot 2026-08-24 15-44-33" src="https://github.com/user-attachments/assets/c7f49bbc-e997-4bae-811c-8404ccc924a5" />
+
+<img width="3840" height="2160" alt="Screenshot 2026-08-24 15-45-09" src="https://github.com/user-attachments/assets/554bb9d3-c97d-40d8-8cf6-4cc0864ac463" />
+
+
 # Have fun.
 And know that you are valuable.
