@@ -17,19 +17,21 @@ Also the upscaling that happened using applications like mpv and vlc weren't as 
 
 
 # Features
-## 1. Change internal render resolution
+## ~~1. Change internal render resolution~~
 ``` 
 --res-720
 --res-1080
 --res-2160
 ```
-These switches let you choose between 720p, 1080p and 2160p internal render resolution.\
+~~These switches let you choose between 720p, 1080p and 2160p internal render resolution.\
 The internal render resolution is the kind of resolution that happens from within the application itself.\
 \
 It does not mean that it actually outputs at that resolution. The output resolution is  depending on what the current output resolution of your Raspberry Pi is.
 The Final output will be scaled to the current output resolution of your Raspberry Pi.\
 \
-**If nothing is provided** when executing this software, the default value is the current output resolution of your Raspberry Pi.
+**If nothing is provided** when executing this software, the default value is the current output resolution of your Raspberry Pi.~~
+>Apparently, I removed this in one of my earlier builds and left some parts of it inside the main.cpp. The reason for this probably was that it does not have any effect on performance at all. This currently has no effect at all. The output completely depends on your current output resolution.
+>Don't use ultrawide, it could have unforseen effects. Maybe this will be added back in again at some point, but there are no plans for now.
 
 ## 2. Modify RGB Color range BEFORE the conversion to RGB
 ```
