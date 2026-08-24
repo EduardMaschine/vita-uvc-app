@@ -104,7 +104,7 @@ This switch makes it possible for the software to run on a Pi 3B+. It changes th
 **If nothing is provided** when executing, the default mode is "DMABUF", not the Pi 3B + supported "MMAP". So you have to actively provide that switch in order to make it run on a Pi 3B +.
 
 ## 8. Enable Audio over USB (v2.0+)
-This only works, if you are using the [VitaUSBStream plugin](https://github.com/BMK-Studio/VitaUSBStream) on your PSVita and if you are on [v2.0 or later of the vita_uvc_app](https://github.com/EduardMaschine/vita_uvc_app/releases).
+This only works, if you are using the [VitaUSBStream plugin](https://github.com/BMK-Studio/VitaUSBStream) on your PSVita and if you are on [v2.0 or later of the vita-uvc-app](https://github.com/EduardMaschine/vita-uvc-app/releases).
 ```
 --audio
 ```
