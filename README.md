@@ -30,6 +30,7 @@ It does not mean that it actually outputs at that resolution. The output resolut
 The Final output will be scaled to the current output resolution of your Raspberry Pi.\
 \
 **If nothing is provided** when executing this software, the default value is the current output resolution of your Raspberry Pi.~~
+>[!CAUTION]
 >Apparently, I removed this in one of my earlier builds and left some parts of it inside the main.cpp. The reason for this probably was that it does not have any effect on performance at all. This currently has no effect at all. The output completely depends on your current output resolution.
 >Don't use ultrawide, it could have unforseen effects. Maybe this will be added back in again at some point, but there are no plans for now.
 
