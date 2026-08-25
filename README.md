@@ -34,6 +34,9 @@ The Final output will be scaled to the current output resolution of your Raspber
 >Apparently, I removed this in one of my earlier builds and left some parts of it inside the main.cpp. The reason for this probably was that it does not have any effect on performance at all. This currently has no effect at all. The output completely depends on your current output resolution.
 >Don't use ultrawide, it could have unforseen effects. Maybe this will be added back in again at some point, but there are no plans for now.
 
+>[!NOTE]
+>As of today, 26th of August 2026, I reimplemented this feature for testing in a personal build. It had to process the image twice. Once when upscaling to 720p, and then again to sort of stretch the image to the current screen size. This causes the GPU and CPU to have a lot of stuff to do. Even tho they weren't fully exhausted. Thus leading to more input lag and stuttering. That probably was the reason I removed it on build v1.6. For now we will leave this feature out. If you want to use this software, just make sure you use it on 16:9 output resolution. If someone much more versed in all this can tackle that, you would be more than welcome.
+
 ## 2. Modify RGB Color range BEFORE the conversion to RGB
 ```
 --rgb-full
@@ -92,7 +95,7 @@ Check the [official Git repo for the udcd_uvc plugin](https://github.com/xerpi/v
 Sets the output filter to either nearest neighbour or bilinear.\
 Bilinear can help to smooth the edges. Possibly good for some games that feel a bit rough with sharp pixels.\
 \
-You can also switch between both filter options by pressind F1 or F2 when the application is running.
+You can also switch between both filter options by pressing F1 or F2 when the application is running.
 * F1 = Nearest Neighbour
 * F2 = Bilinear
 
@@ -159,6 +162,29 @@ Maybe if I can get my hands on a Pi Zero 2W and it does not run well, I will upd
 But for now that's it.
 I simply don't have time to maintain it really. 
 If you want to build up on the horrible code of this application, please feel free to do so.
+
+# Personal recommendation
+Use the following configs for the best output:
+* --vita-544
+* --rgb-full
+* --post-full
+* --fps-30
+* --pi3bp
+* --audio
+
+Most of these options are default except for --pi3bp and --audio. 
+
+So these are the only two you actually have to provide when launching the software.
+
+We do 30fps here, because in it's current state, the UVC plugin just cannot provide steady full 60fps.
+
+The pixels look mostly perfect and the overall quality is nice. And if you'd ask me, it even looks better than using OBS and upscaling it there with point or area scaling (nearest neighbour is not an option here).
+Following an example of where this software just works better.
+
+<img width="2311" height="806" alt="OBS-Screenshot 2026-08-26 00-53-15 - Kopie" src="https://github.com/user-attachments/assets/e812f749-d533-42f5-bd1a-e05069a0589e" />
+On the left you see OBS, on the right you see vita-uvc-app running on a pi4b.
+
+Both were upscaling to 2160p. The pixels and colors are just much more accurate on vita-uvc-app.
 
 # Shoutouts to:
 BenMitnicK, for the [VitaUSBStream plugin](https://github.com/BMK-Studio/VitaUSBStream) which expanded the udcd_uvc plugin by adding audio support via USB
