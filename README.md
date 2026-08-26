@@ -192,6 +192,9 @@ Requires=seatd.service user@1000.service
 Wants=systemd-user-sessions.service
 
 [Service]
+# Enables FULL RGB Output on Labwc to your HDMI output
+ExecStartPre=/usr/bin/kmstest -c HDMI-A-1 -P "Broadcast RGB=1"
+# Launches the vita application
 ExecStart=/usr/bin/labwc -s /home/pi/vita-launch.sh
 Restart=always
 User=pi
