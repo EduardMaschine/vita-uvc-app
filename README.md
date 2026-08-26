@@ -202,19 +202,18 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 ```
-### 7. Enable and start the service
+### 7. Enable the service and reboot
 ```
 sudo systemctl enable vita-start.service
-sudo systemctl start vita-start.service
+sudo reboot
 ```
-### 8. Crank up the volume!
+### 8. If you can't hear anything - Crank up the volume!
 ```
 wpctl set-volume @DEFAULT_AUDIO_SINK@ 100%
 ```
-### 9. REBOOT!
-```
-sudo reboot
-```
+If the volume level does not stay, you can make it persistent by creating your own systemd service that runs at boot,
+or by configuring the labwc autostart config file (~/.config/labwc/autostart). If "autostart" does not exist, you can create it by using nano.
+Fill the file with the command above to set the volume level.
 
 ### For Desktop full Pi OS installations
 You basically copy over the binary file (vita-uvc-app), make it executable and double click it.
