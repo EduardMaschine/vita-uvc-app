@@ -138,7 +138,7 @@ If you have a Pi Zero 2W, please test this software in the --pi3bp mode. Unfortu
 # How to install?
 This guide shows you how to install it on a fresh installed Raspberry Pi OS (Lite) 64bit utilizing labwc, a lightweight Wayland compositor. This guide requires you to have your Pi have an active internet connection and for you to already be connected to it via SSH (or any other way to access the Terminal).
 
-### 1. Download the binary by using this wget command on the Pi itself (if connected to the internet) or by actively going to the release section and download it manually and push it to the Pi's OS. And make it launchable.
+### 1. Download vita-uvc-app and make it executable.
 ```
 wget "https://github.com/EduardMaschine/vita-uvc-app/releases/latest/download/vita-uvc-app" ~/
 chmod a+x ~/vita-uvc-app
