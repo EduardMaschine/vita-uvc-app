@@ -42,8 +42,6 @@ The Final output will be scaled to the current output resolution of your Raspber
 --rgb-full
 --rgb-limited
 ```
-Check the folder "**example_screenshots**" to see what it does.
-
 **If nothing is provided** when executing, the default mode is full.
 
 ## 3. Modify RGB Color range AFTER the conversion to RGB
@@ -51,8 +49,6 @@ Check the folder "**example_screenshots**" to see what it does.
 --post-full
 --post-limited
 ```
-Check the folder "**example_screenshots**" to see what it does.
-
 **If nothing is provided** when executing, the default mode is full.
 
 ## 4. Set the FPS limit
@@ -138,6 +134,96 @@ You can freely change the values or leave switches out so the default modes take
 
 ## What about the Pi Zero 2W?
 If you have a Pi Zero 2W, please test this software in the --pi3bp mode. Unfortunately I cannot get my hands on that model as it's sold out for a very long time now. The current price tag is just far too high. With that price you can currently get a Pi5 2GB model... so I won't buy it and won't be able to test this myself. If any performance issues happen on that model, please feel free to fix it yourself if you are cappable. If you cannot, please wait until I can finally lay my hands on that model.
+
+# How to install?
+This guide shows you how to install it on a fresh installed Raspberry Pi OS (Lite) 64bit utilizing labwc, a lightweight Wayland compositor. This guide requires you to have your Pi have an active internet connection and for you to already be connected to it via SSH (or any other way to access the Terminal).
+
+### 1. Download the binary by using this curl command on the Pi itself (if connected to the internet) or by actively going to the release section and download it manually and push it to the Pi's OS. And make it launchable.
+```
+wget "https://github.com/EduardMaschine/vita-uvc-app/releases/latest/download/vita-uvc-app" ~/
+chmod a+x ~/vita-uvc-app
+```
+### 2. Install labwc, pipewire (audio) and seatd (video).
+```
+sudo apt-get update
+sudo apt-get install labwc
+sudo apt-get install pipewire
+sudo apt-get install seatd
+```
+We use pipewire here, as the application itself uses pw-loopback for grabbing the audio coming in over USB
+when you use the VitaUSBStream plugin.
+### 3. Download transparent icons pack to hide the mouse cursor (optional) [icons.zip](https://github.com/user-attachments/files/31483476/icons.zip) and extract it
+```
+wget "https://github.com/user-attachments/files/31483476/icons.zip" ~/
+unzip icons.zip -d ~/
+```
+This will hide the annoying cursor of labwc.
+If the icons.zip download fails... I might include it to the releases section at some point.
+
+### 4. Create launcher .sh file
+```
+nano ~/vita-launch.sh
+```
+
+```
+#!/bin/sh
+
+# Setup the X11 environment
+xset -dpms
+xset s off
+xset s noblank
+
+# Launch application
+exec /home/pi/vita-uvc-app --audio --pi3bp
+```
+### 5. Make the launcher file executable
+```
+chmod a+x ~/vita-launch.sh
+```
+### 6. Create systemd service
+```
+sudo nano /etc/systemd/system/vita-start.service
+```
+```
+[Unit]
+Description=Wayland Kiosk Launcher using labwc
+After=systemd-user-sessions.service user@1000.service seatd.service
+Requires=seatd.service user@1000.service
+Wants=systemd-user-sessions.service
+
+[Service]
+ExecStart=/usr/bin/labwc -s /home/pi/vita-launch.sh
+Restart=always
+User=pi
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+### 7. Enable and start the service
+```
+sudo systemctl enable vita-start.service
+sudo systemctl start vita-start.service
+```
+### 8. Crank up the volume!
+```
+wpctl set-volume @DEFAULT_AUDIO_SINK@ 100%
+```
+### 9. REBOOT!
+```
+sudo reboot
+```
+
+### For Desktop full Pi OS installations
+You basically copy over the binary file (vita-uvc-app), make it executable and double click it.
+If you use VitaUSBStream plugin on your Vita and want audio, run it from the terminal using --audio. If audio is not playing, install pipewire and crank the audio up using 
+```
+wpctl set-volume @DEFAULT_AUDIO_SINK@ 100%
+``` 
+# Will there be a full flashable image file?
+Probably?...
 
 # How to compile it?
 Use this:
