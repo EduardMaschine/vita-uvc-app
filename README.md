@@ -17,41 +17,23 @@ Also the upscaling that happened using applications like mpv and vlc weren't as 
 
 
 # Features
-## ~~1. Change internal render resolution~~
-``` 
---res-720
---res-1080
---res-2160
-```
-~~These switches let you choose between 720p, 1080p and 2160p internal render resolution.\
-The internal render resolution is the kind of resolution that happens from within the application itself.\
-\
-It does not mean that it actually outputs at that resolution. The output resolution is  depending on what the current output resolution of your Raspberry Pi is.
-The Final output will be scaled to the current output resolution of your Raspberry Pi.\
-\
-**If nothing is provided** when executing this software, the default value is the current output resolution of your Raspberry Pi.~~
->[!CAUTION]
->Apparently, I removed this in one of my earlier builds and left some parts of it inside the main.cpp. The reason for this probably was that it does not have any effect on performance at all. This currently has no effect at all. The output completely depends on your current output resolution.
->Don't use ultrawide, it could have unforseen effects. Maybe this will be added back in again at some point, but there are no plans for now.
-
->[!NOTE]
->As of today, 26th of August 2026, I reimplemented this feature for testing in a personal build. It had to process the image twice. Once when upscaling to 720p, and then again to sort of stretch the image to the current screen size. This causes the GPU and CPU to have a lot of stuff to do. Even tho they weren't fully exhausted. Thus leading to more input lag and stuttering. That probably was the reason I removed it on build v1.6. For now we will leave this feature out. If you want to use this software, just make sure you use it on 16:9 output resolution. If someone much more versed in all this can tackle that, you would be more than welcome.
-
-## 2. Modify RGB Color range BEFORE the conversion to RGB
+## 1. Modify RGB Color range BEFORE the conversion to RGB
 ```
 --rgb-full
 --rgb-limited
 ```
-**If nothing is provided** when executing, the default mode is full.
+>[!TIP]
+>**If nothing is provided** when executing, the default mode is full.
 
-## 3. Modify RGB Color range AFTER the conversion to RGB
+## 2. Modify RGB Color range AFTER the conversion to RGB
 ```
 --post-full
 --post-limited
 ```
-**If nothing is provided** when executing, the default mode is full.
+>[!TIP]
+>**If nothing is provided** when executing, the default mode is full.
 
-## 4. Set the FPS limit
+## 3. Set the FPS limit
 ```
 --fps-30
 --fps-60
@@ -60,9 +42,10 @@ The udcd_uvc plugin has it's limits. If you want full native resolution of the P
 
 Check the [official Git repo for the udcd_uvc plugin](https://github.com/xerpi/vita-udcd-uvc) to have an overview of what the limits are. 
 
-**If nothing is provided** when executing, the default mode is "30".
+>[!TIP]
+>**If nothing is provided** when executing, the default mode is "30".
 
-## 5. PSVita udcd_uvc output resolution
+## 4. PSVita udcd_uvc output resolution
 ```
 --vita-720
 --vita-544
@@ -80,9 +63,10 @@ Check the [official Git repo for the udcd_uvc plugin](https://github.com/xerpi/v
 
 Check the [official Git repo for the udcd_uvc plugin](https://github.com/xerpi/vita-udcd-uvc) to have an overview of what the limits are. 
 
-**If nothing is provided** when executing, the default mode is "544".
+>[!TIP]
+>**If nothing is provided** when executing, the default mode is "544".
 
-## 6. Set the output filter
+## 5. Set the output filter
 ```
 --filter-bilinear
 --filter-nearest
@@ -95,28 +79,34 @@ You can also switch between both filter options by pressing F1 or F2 when the ap
 * F1 = Nearest Neighbour
 * F2 = Bilinear
 
-**If nothing is provided** when executing, the default mode is "nearest".
+>[!TIP]
+>**If nothing is provided** when executing, the default mode is "nearest".
 
-## 7. Raspberry Pi 3B + Support
+## 6. Raspberry Pi 3B + Support
 ```
 --pi3bp
 ```
-This switch makes it possible for the software to run on a Pi 3B+. It changes the way things are handled under the hood. It forces MMAP instead of DMABUF. If you face any performance related issues, you might want to use that switch. You can also use that switch when executing the software on a Pi4 or Pi5.
+~~This switch makes it possible for the software to run on a Pi 3B+. It changes the way things are handled under the hood. It forces MMAP instead of DMABUF. If you face any performance related issues, you might want to use that switch. You can also use that switch when executing the software on a Pi4 or Pi5.~~
 
-**If nothing is provided** when executing, the default mode is "DMABUF", not the Pi 3B + supported "MMAP". So you have to actively provide that switch in order to make it run on a Pi 3B +.
+~~**If nothing is provided** when executing, the default mode is "DMABUF", not the Pi 3B + supported "MMAP". So you have to actively provide that switch in order to make it run on a Pi 3B +.~~
+>[!IMPORTANT]
+> As of version 2.5, this is now the default mode. DMA-BUF has been removed from the code, as there was no performance difference between both options except for that MMAP is working perfectly fine on Pi3B+.
 
-## 8. Enable Audio over USB (v2.0+)
+## 7. Enable Audio over USB (v2.0+)
 This only works, if you are using the [VitaUSBStream plugin](https://github.com/BMK-Studio/VitaUSBStream) on your PSVita and if you are on [v2.0 or later of the vita-uvc-app](https://github.com/EduardMaschine/vita-uvc-app/releases).
 ```
 --audio
 ```
 This switch enables the audio output coming in via USB over to HDMI by executing a pw-loopback command.
 
+>[!TIP]
+>**If nothing is provided** when executing, audio is turned off. Make sure to execute the application using --audio.
+
 # Example execution
 ```
-bash vita_uvc_app --fps-30 --vita-544 --res-2160 --filter-nearest --rgb-full --post-full --pi3bp 
+vita_uvc_app --fps-30 --vita-544 --filter-nearest --rgb-full --post-full --audio
 ```
-This executes the software with mostly default values, except for the "--pi3bp" mode, but you get the idea. 
+This executes the software with mostly default values, you get the idea. 
 
 You can freely change the values or leave switches out so the default modes takes over.
 
@@ -257,12 +247,10 @@ Use the following configs for the best output:
 * --rgb-full
 * --post-full
 * --fps-30
-* --pi3bp
+* --filter-nearest
 * --audio
 
-Most of these options are default except for --pi3bp and --audio. 
-
-So these are the only two you actually have to provide when launching the software.
+Most of these options are default except for --audio. 
 
 We do 30fps here, because in it's current state, the UVC plugin just cannot provide steady full 60fps.
 
