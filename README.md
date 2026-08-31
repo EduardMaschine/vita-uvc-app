@@ -25,6 +25,9 @@ Also the upscaling that happened using applications like mpv and vlc weren't as 
 >[!TIP]
 >**If nothing is provided** when executing, the default mode is full.
 
+>[!NOTE]
+>**Hotkey**: F4
+
 ## 2. Modify RGB Color range AFTER the conversion to RGB
 ```
 --post-full
@@ -32,6 +35,9 @@ Also the upscaling that happened using applications like mpv and vlc weren't as 
 ```
 >[!TIP]
 >**If nothing is provided** when executing, the default mode is full.
+
+>[!NOTE]
+>**Hotkey**: F5
 
 ## 3. Set the FPS limit
 ```
@@ -44,6 +50,9 @@ Check the [official Git repo for the udcd_uvc plugin](https://github.com/xerpi/v
 
 >[!TIP]
 >**If nothing is provided** when executing, the default mode is "30".
+
+>[!NOTE]
+>**Hotkey**: F3
 
 ## 4. PSVita udcd_uvc output resolution
 ```
@@ -66,6 +75,9 @@ Check the [official Git repo for the udcd_uvc plugin](https://github.com/xerpi/v
 >[!TIP]
 >**If nothing is provided** when executing, the default mode is "544".
 
+>[!NOTE]
+>**Hotkey**: F2
+
 ## 5. Set the output filter
 ```
 --filter-bilinear
@@ -74,13 +86,12 @@ Check the [official Git repo for the udcd_uvc plugin](https://github.com/xerpi/v
 
 Sets the output filter to either nearest neighbour or bilinear.\
 Bilinear can help to smooth the edges. Possibly good for some games that feel a bit rough with sharp pixels.\
-\
-You can also switch between both filter options by pressing F1 or F2 when the application is running.
-* F1 = Nearest Neighbour
-* F2 = Bilinear
 
 >[!TIP]
 >**If nothing is provided** when executing, the default mode is "nearest".
+
+>[!NOTE]
+>**Hotkey**: F1
 
 ## 6. Raspberry Pi 3B + Support
 ```
