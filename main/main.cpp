@@ -3,7 +3,6 @@
 // Uses V4L2 capture + EGL + GLES2 + X11 fullscreen window
 //
 // Two capture paths:
-//   • Pi4/Pi5: DMA‑BUF zero‑copy import via EGLImage + glEGLImageTargetTexture2DOES
 //   • Pi3B+:   MMAP + CPU upload via glTexSubImage2D
 //
 // Command‑line switches:
@@ -13,13 +12,15 @@
 //   --fps-30 / --fps-60                   -> capture FPS
 //   --vita-272 / 488 / 504 / 544 / 720    -> capture resolution presets
 //   --filter-nearest / --filter-bilinear  -> filter options
-//   --pi3bp                               -> force Pi3B+ MMAP path (fixes compatibility with pi3b+)
 //   --audio                               -> enables audio output from USB over to HDMI by using pw-loopback. (Thanks to the VitaUSBStream plugin for the Vita)
 //
 // Keyboard:
-//   F1 	-> 	NEAREST filter
-//   F2 	-> 	BILINEAR filter
-//   ESC 	-> 	exit
+//   F1  ->  NEAREST/BILINEAR filter toggle
+//   F2  ->  cycle Vita resolution
+//   F3  ->  toggle FPS 30/60
+//   F4  ->  toggle pre RGB full/limited
+//   F5  ->  toggle post RGB full/limited
+//   ESC ->  exit
 // ============================================================================
 
 #include <X11/Xlib.h>
@@ -37,6 +38,7 @@
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
+#include <time.h>
 
 extern "C" {
 #include <EGL/egl.h>
@@ -44,7 +46,6 @@ extern "C" {
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 #include <linux/videodev2.h>
-#include <libdrm/drm_fourcc.h>
 }
 
 // GL_EXT_texture_rg fallback (Pi4/Pi5 path)
@@ -65,18 +66,24 @@ struct V4L2State {
     uint32_t uv_stride;
     uint32_t buf_count;
 
-    // DMA-BUF path (Pi4/Pi5)
-    int      dmabuf_fds[MAX_V4L2_BUFFERS];
-
     // MMAP path (Pi3B+)
     uint8_t* base[MAX_V4L2_BUFFERS];
     size_t   buf_size[MAX_V4L2_BUFFERS];
 };
 
-static bool g_use_dmabuf   = true;   // default: Pi4/Pi5
-static bool g_pi3_mode     = false;  // set by --pi3bp
+static bool g_pi3_mode     = true;   // Pi3B+ mode enabled by default
 static bool g_enable_audio = false;  // set by --audio
 static pid_t g_loopback_pid = 0;
+
+// Toast globals
+static char         g_toast_text[256] = {0};
+static double       g_toast_until     = 0.0;
+static Display*     g_toast_dpy       = nullptr;
+static Window       g_toast_win       = 0;
+static GC           g_toast_gc        = 0;
+static int          g_toast_screen_w  = 0;
+static int          g_toast_screen_h  = 0;
+static XFontStruct* g_toast_font      = nullptr;
 
 static void die(const char* msg) {
     perror(msg);
@@ -103,13 +110,11 @@ static void set_fps(int fd, int fps) {
 }
 
 // BLOCKING init: waits until /dev/video0 is available and working
-// For Pi4/Pi5: sets up DMA-BUF export
 // For Pi3B+: uses MMAP and CPU upload
 static V4L2State init_v4l2_blocking(const char* dev, int fps, uint32_t cap_w, uint32_t cap_h) {
     V4L2State v{};
     memset(&v, 0, sizeof(v));
     for (uint32_t i = 0; i < MAX_V4L2_BUFFERS; ++i) {
-        v.dmabuf_fds[i] = -1;
         v.base[i]       = nullptr;
         v.buf_size[i]   = 0;
     }
@@ -172,113 +177,66 @@ static V4L2State init_v4l2_blocking(const char* dev, int fps, uint32_t cap_w, ui
 
         v.buf_count = req.count;
 
-        if (g_use_dmabuf) {
-            // Pi4/Pi5: export all buffers as DMA-BUF and queue them
-            for (uint32_t i = 0; i < v.buf_count; ++i) {
-                struct v4l2_exportbuffer exp{};
-                memset(&exp, 0, sizeof(exp));
-                exp.type  = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-                exp.index = i;
-                exp.flags = O_CLOEXEC;
+        // Pi3B+: MMAP buffers and queue them
+        for (uint32_t i = 0; i < v.buf_count; ++i) {
+            struct v4l2_buffer buf{};
+            memset(&buf, 0, sizeof(buf));
+            buf.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+            buf.memory = V4L2_MEMORY_MMAP;
+            buf.index  = i;
 
-                if (ioctl(v.fd, VIDIOC_EXPBUF, &exp) < 0) {
-                    fprintf(stderr, "VIDIOC_EXPBUF failed (%d: %s), closing and retrying...\n",
-                            errno, strerror(errno));
-                    for (uint32_t j = 0; j < i; ++j) {
-                        if (v.dmabuf_fds[j] >= 0)
-                            close(v.dmabuf_fds[j]);
-                        v.dmabuf_fds[j] = -1;
+            if (ioctl(v.fd, VIDIOC_QUERYBUF, &buf) < 0) {
+                fprintf(stderr, "VIDIOC_QUERYBUF failed (%d: %s), closing and retrying...\n",
+                        errno, strerror(errno));
+                for (uint32_t j = 0; j < i; ++j) {
+                    if (v.base[j]) {
+                        munmap(v.base[j], v.buf_size[j]);
+                        v.base[j]     = nullptr;
+                        v.buf_size[j] = 0;
                     }
-                    close(v.fd);
-                    v.fd = -1;
-                    usleep(500 * 1000);
-                    goto retry;
                 }
-
-                v.dmabuf_fds[i] = exp.fd;
-
-                struct v4l2_buffer buf{};
-                memset(&buf, 0, sizeof(buf));
-                buf.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-                buf.memory = V4L2_MEMORY_MMAP;
-                buf.index  = i;
-
-                if (ioctl(v.fd, VIDIOC_QBUF, &buf) < 0) {
-                    fprintf(stderr, "VIDIOC_QBUF (initial) failed (%d: %s), closing and retrying...\n",
-                            errno, strerror(errno));
-                    for (uint32_t j = 0; j < i + 1; ++j) {
-                        if (v.dmabuf_fds[j] >= 0)
-                            close(v.dmabuf_fds[j]);
-                        v.dmabuf_fds[j] = -1;
-                    }
-                    close(v.fd);
-                    v.fd = -1;
-                    usleep(500 * 1000);
-                    goto retry;
-                }
+                close(v.fd);
+                v.fd = -1;
+                usleep(500 * 1000);
+                goto retry;
             }
-        } else {
-            // Pi3B+: MMAP buffers and queue them
-            for (uint32_t i = 0; i < v.buf_count; ++i) {
-                struct v4l2_buffer buf{};
-                memset(&buf, 0, sizeof(buf));
-                buf.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-                buf.memory = V4L2_MEMORY_MMAP;
-                buf.index  = i;
 
-                if (ioctl(v.fd, VIDIOC_QUERYBUF, &buf) < 0) {
-                    fprintf(stderr, "VIDIOC_QUERYBUF failed (%d: %s), closing and retrying...\n",
-                            errno, strerror(errno));
-                    for (uint32_t j = 0; j < i; ++j) {
-                        if (v.base[j]) {
-                            munmap(v.base[j], v.buf_size[j]);
-                            v.base[j]     = nullptr;
-                            v.buf_size[j] = 0;
-                        }
+            void* ptr = mmap(NULL, buf.length,
+                             PROT_READ | PROT_WRITE,
+                             MAP_SHARED, v.fd, buf.m.offset);
+            if (ptr == MAP_FAILED) {
+                fprintf(stderr, "mmap failed (%d: %s), closing and retrying...\n",
+                        errno, strerror(errno));
+                for (uint32_t j = 0; j < i; ++j) {
+                    if (v.base[j]) {
+                        munmap(v.base[j], v.buf_size[j]);
+                        v.base[j]     = nullptr;
+                        v.buf_size[j] = 0;
                     }
-                    close(v.fd);
-                    v.fd = -1;
-                    usleep(500 * 1000);
-                    goto retry;
                 }
+                close(v.fd);
+                v.fd = -1;
+                usleep(500 * 1000);
+                goto retry;
+            }
 
-                void* ptr = mmap(NULL, buf.length,
-                                 PROT_READ | PROT_WRITE,
-                                 MAP_SHARED, v.fd, buf.m.offset);
-                if (ptr == MAP_FAILED) {
-                    fprintf(stderr, "mmap failed (%d: %s), closing and retrying...\n",
-                            errno, strerror(errno));
-                    for (uint32_t j = 0; j < i; ++j) {
-                        if (v.base[j]) {
-                            munmap(v.base[j], v.buf_size[j]);
-                            v.base[j]     = nullptr;
-                            v.buf_size[j] = 0;
-                        }
+            v.base[i]     = (uint8_t*)ptr;
+            v.buf_size[i] = buf.length;
+
+            if (ioctl(v.fd, VIDIOC_QBUF, &buf) < 0) {
+                fprintf(stderr, "VIDIOC_QBUF (initial) failed (%d: %s), closing and retrying...\n",
+                        errno, strerror(errno));
+                for (uint32_t j = 0; j < i + 1; ++j) {
+                    if (v.base[j]) {
+                        munmap(v.base[j], v.buf_size[j]);
+                        v.base[j]     = nullptr;
+                        v.buf_size[j] = 0;
                     }
-                    close(v.fd);
-                    v.fd = -1;
-                    usleep(500 * 1000);
-                    goto retry;
                 }
-
-                v.base[i]     = (uint8_t*)ptr;
-                v.buf_size[i] = buf.length;
-
-                if (ioctl(v.fd, VIDIOC_QBUF, &buf) < 0) {
-                    fprintf(stderr, "VIDIOC_QBUF (initial) failed (%d: %s), closing and retrying...\n",
-                            errno, strerror(errno));
-                    for (uint32_t j = 0; j < i + 1; ++j) {
-                        if (v.base[j]) {
-                            munmap(v.base[j], v.buf_size[j]);
-                            v.base[j]     = nullptr;
-                            v.buf_size[j] = 0;
-                        }
-                    }
-                    close(v.fd);
-                    v.fd = -1;
-                    usleep(500 * 1000);
-                    goto retry;
-                }
+                close(v.fd);
+                v.fd = -1;
+                usleep(500 * 1000);
+                goto retry;
             }
         }
 
@@ -287,19 +245,11 @@ static V4L2State init_v4l2_blocking(const char* dev, int fps, uint32_t cap_w, ui
             if (ioctl(v.fd, VIDIOC_STREAMON, &type) < 0) {
                 fprintf(stderr, "VIDIOC_STREAMON failed (%d: %s), closing and retrying...\n",
                         errno, strerror(errno));
-                if (g_use_dmabuf) {
-                    for (uint32_t j = 0; j < v.buf_count; ++j) {
-                        if (v.dmabuf_fds[j] >= 0)
-                            close(v.dmabuf_fds[j]);
-                        v.dmabuf_fds[j] = -1;
-                    }
-                } else {
-                    for (uint32_t j = 0; j < v.buf_count; ++j) {
-                        if (v.base[j]) {
-                            munmap(v.base[j], v.buf_size[j]);
-                            v.base[j]     = nullptr;
-                            v.buf_size[j] = 0;
-                        }
+                for (uint32_t j = 0; j < v.buf_count; ++j) {
+                    if (v.base[j]) {
+                        munmap(v.base[j], v.buf_size[j]);
+                        v.base[j]     = nullptr;
+                        v.buf_size[j] = 0;
                     }
                 }
                 close(v.fd);
@@ -309,15 +259,13 @@ static V4L2State init_v4l2_blocking(const char* dev, int fps, uint32_t cap_w, ui
             }
         }
 
-        fprintf(stderr, "V4L2 started (%s): %ux%u (buffers: %u)\n",
-                g_use_dmabuf ? "DMA-BUF" : "MMAP",
-                v.width, v.height, v.buf_count);
+        fprintf(stderr, "V4L2 started (MMAP): %ux%u (buffers: %u)\n",
+            v.width, v.height, v.buf_count);
         return v;
 
     retry:
         memset(&v, 0, sizeof(v));
         for (uint32_t i = 0; i < MAX_V4L2_BUFFERS; ++i) {
-            v.dmabuf_fds[i] = -1;
             v.base[i]       = nullptr;
             v.buf_size[i]   = 0;
         }
@@ -326,13 +274,9 @@ static V4L2State init_v4l2_blocking(const char* dev, int fps, uint32_t cap_w, ui
 }
 
 static void restart_v4l2(V4L2State &cam, int fps, uint32_t cap_w, uint32_t cap_h, int &uv_w, int &uv_h) {
-    fprintf(stderr, "Restarting V4L2 capture (%s)...\n", g_use_dmabuf ? "DMA-BUF" : "MMAP");
+    fprintf(stderr, "Restarting V4L2 capture (MMAP)...\n");
 
     for (uint32_t i = 0; i < cam.buf_count; ++i) {
-        if (cam.dmabuf_fds[i] >= 0) {
-            close(cam.dmabuf_fds[i]);
-            cam.dmabuf_fds[i] = -1;
-        }
         if (cam.base[i]) {
             munmap(cam.base[i], cam.buf_size[i]);
             cam.base[i]     = nullptr;
@@ -350,10 +294,13 @@ static void restart_v4l2(V4L2State &cam, int fps, uint32_t cap_w, uint32_t cap_h
     uv_w = cam.width / 2;
     uv_h = cam.height / 2;
 
-    fprintf(stderr, "V4L2 restarted (%s): %ux%u\n",
-            g_use_dmabuf ? "DMA-BUF" : "MMAP",
+    fprintf(stderr, "V4L2 restarted (MMAP): %ux%u\n",
             cam.width, cam.height);
 }
+
+// ============================================================================
+// SHADERS
+// ============================================================================
 
 static const char* vs_src = R"(
 attribute vec2 aPos;
@@ -455,6 +402,71 @@ static GLuint create_program(const char* fs_src_in) {
     return prog;
 }
 
+// ============================================================================
+// TOAST SYSTEM (X11 overlay)
+// ============================================================================
+
+static double now_sec() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec * 1e-9;
+}
+
+static void show_toast(const char* msg) {
+    if (!g_toast_dpy || !g_toast_win || !g_toast_gc)
+        return;
+
+    snprintf(g_toast_text, sizeof(g_toast_text), "%s", msg);
+    g_toast_until = now_sec() + 1.5; // visible for ~1.5s
+}
+
+static void draw_toast() {
+    if (!g_toast_dpy || !g_toast_win || !g_toast_gc || !g_toast_font)
+        return;
+
+    if (g_toast_text[0] == 0)
+        return;
+
+    double t = now_sec();
+    if (t > g_toast_until) {
+        g_toast_text[0] = 0;
+        return;
+    }
+
+    int len = (int)strlen(g_toast_text);
+    if (len <= 0)
+        return;
+
+    int direction, ascent, descent;
+    XCharStruct overall;
+    XTextExtents(g_toast_font, g_toast_text, len, &direction, &ascent, &descent, &overall);
+
+    int text_w = overall.width;
+    int text_h = ascent + descent;
+
+    int pad = 30;
+    int x = (g_toast_screen_w - text_w) / 2;
+    int y = 120; // a bit lower for big font
+
+    int bx = x - pad;
+//    int by = y - text_h - pad / 2;
+    int by = y - text_h - pad / 6;
+    int bw = text_w + pad * 2;
+    int bh = text_h + pad;
+
+    XSetForeground(g_toast_dpy, g_toast_gc, BlackPixel(g_toast_dpy, DefaultScreen(g_toast_dpy)));
+    XFillRectangle(g_toast_dpy, g_toast_win, g_toast_gc, bx, by, bw, bh);
+
+    XSetForeground(g_toast_dpy, g_toast_gc, WhitePixel(g_toast_dpy, DefaultScreen(g_toast_dpy)));
+    XDrawString(g_toast_dpy, g_toast_win, g_toast_gc, x, y, g_toast_text, len);
+
+    XFlush(g_toast_dpy);
+}
+
+// ============================================================================
+// MAIN
+// ============================================================================
+
 int main(int argc, char** argv) {
     int screen_w, screen_h;
     int internal_w, internal_h;
@@ -462,6 +474,12 @@ int main(int argc, char** argv) {
     // Default Vita capture resolution
     uint32_t vita_w = 960;
     uint32_t vita_h = 544;
+
+    // Vita presets in the order F2 should cycle: 720 -> 544 -> 504 -> 488 -> 272
+    const uint32_t vita_presets_w[] = { 1280, 960, 896, 864, 480 };
+    const uint32_t vita_presets_h[] = { 720, 544, 504, 488, 272 };
+    const int vita_presets_count = sizeof(vita_presets_w) / sizeof(vita_presets_w[0]);
+    int vita_index = 1; // default index points to 544 (960x544)
 
     int rgbMode  = 0;  // 0 = full-range, 1 = limited (NV12 -> RGB)
     int postMode = 0;  // 0 = full-range, 1 = limited (RGB post-processing)
@@ -513,12 +531,19 @@ int main(int argc, char** argv) {
         } else if (!strcmp(argv[i], "--filter-bilinear")) {
             filterMode = 1;
         } else if (!strcmp(argv[i], "--pi3bp")) {
-            g_use_dmabuf = false;
             g_pi3_mode   = true;
-            fprintf(stderr, "Pi3B+ mode enabled: using MMAP + glTexSubImage2D (no DMA-BUF)\n");
+            fprintf(stderr, "Pi3B+ mode enabled: using MMAP + glTexSubImage2D\n");
         } else if (!strcmp(argv[i], "--audio")) {
             g_enable_audio = true;
             fprintf(stderr, "Audio forwarding enabled (pre-app pw-loopback)\n");
+        }
+    }
+
+    // Determine initial vita_index based on parsed --vita-XXX (defaults to 544)
+    for (int i = 0; i < vita_presets_count; ++i) {
+        if (vita_w == vita_presets_w[i] && vita_h == vita_presets_h[i]) {
+            vita_index = i;
+            break;
         }
     }
 
@@ -526,9 +551,7 @@ int main(int argc, char** argv) {
     if (g_enable_audio) {
         pid_t child = fork();
         if (child == 0) {
-            // child process: run pw-loopback
             execlp("pw-loopback", "pw-loopback", "-C", "73", "-P", "74", (char*)NULL);
-//            execlp("pw-loopback", "pw-loopback", "-C", "73", "-P", "74", "--capture-channel-map", "FL,FR", "--playback-channel-map", "FL,FR", (char*)NULL);
             _exit(127);
         } else if (child < 0) {
             fprintf(stderr, "Audio: fork pw-loopback failed (%d: %s)\n", errno, strerror(errno));
@@ -547,13 +570,9 @@ int main(int argc, char** argv) {
     screen_w = DisplayWidth(dpy, screen);
     screen_h = DisplayHeight(dpy, screen);
 
-    // If internal_w/h were not set by args, default to screen size
-    if (internal_w <= 0 || internal_h <= 0) {
-        internal_w = screen_w;
-        internal_h = screen_h;
-    }
+    internal_w = (internal_w > 0) ? internal_w : screen_w;
+    internal_h = (internal_h > 0) ? internal_h : screen_h;
 
-    // Precompute uniforms based on rgbMode/postMode
     float y_scale, y_offset, uv_scale;
     float post_scale, post_offset;
 
@@ -602,6 +621,21 @@ int main(int argc, char** argv) {
     xev.xclient.data.l[2]    = 0;
     XSendEvent(dpy, root, False, SubstructureNotifyMask, &xev);
 
+    GC gc = XCreateGC(dpy, win, 0, NULL);
+    g_toast_dpy      = dpy;
+    g_toast_win      = win;
+    g_toast_gc       = gc;
+    g_toast_screen_w = screen_w;
+    g_toast_screen_h = screen_h;
+
+    g_toast_font = XLoadQueryFont(dpy, "-misc-fixed-bold-r-normal--70-*-*-*-*-*-*-*");
+    if (!g_toast_font) {
+        g_toast_font = XLoadQueryFont(dpy, "fixed");
+    }
+    if (g_toast_font) {
+        XSetFont(dpy, gc, g_toast_font->fid);
+    }
+
     EGLDisplay egl_dpy = eglGetDisplay((EGLNativeDisplayType)dpy);
     if (egl_dpy == EGL_NO_DISPLAY) die("eglGetDisplay");
 
@@ -638,21 +672,6 @@ int main(int argc, char** argv) {
 
     eglSwapInterval(egl_dpy, 0);
 
-    PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR_fn =
-        (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
-    PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR_fn =
-        (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
-    PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES_fn =
-        (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
-
-    if (g_use_dmabuf) {
-        if (!eglCreateImageKHR_fn || !eglDestroyImageKHR_fn || !glEGLImageTargetTexture2DOES_fn) {
-            fprintf(stderr, "Required DMA-BUF/EGLImage extensions not available, falling back to MMAP path\n");
-            g_use_dmabuf = false;
-            g_pi3_mode   = true;
-        }
-    }
-
     V4L2State cam = init_v4l2_blocking("/dev/video0", fps, vita_w, vita_h);
 
     GLuint progYUV = create_program(fs_yuv_single_pass_src);
@@ -685,13 +704,10 @@ int main(int argc, char** argv) {
     glBindTexture(GL_TEXTURE_2D, texY);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    if (filterMode == 1) {
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    } else {
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    }
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                    filterMode == 1 ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                    filterMode == 1 ? GL_LINEAR : GL_NEAREST);
 
     if (g_pi3_mode) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE,
@@ -707,13 +723,10 @@ int main(int argc, char** argv) {
     glBindTexture(GL_TEXTURE_2D, texUV);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    if (filterMode == 1) {
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    } else {
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    }
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                    filterMode == 1 ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                    filterMode == 1 ? GL_LINEAR : GL_NEAREST);
 
     if (g_pi3_mode) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA,
@@ -736,31 +749,145 @@ int main(int argc, char** argv) {
                 KeySym ks = XLookupKeysym(&ev.xkey, 0);
 
                 if (ks == XK_F1) {
-                    filterMode = 0;
+                    filterMode = (filterMode == 0) ? 1 : 0;
 
                     glBindTexture(GL_TEXTURE_2D, texY);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                                    filterMode == 1 ? GL_LINEAR : GL_NEAREST);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                                    filterMode == 1 ? GL_LINEAR : GL_NEAREST);
 
                     glBindTexture(GL_TEXTURE_2D, texUV);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                                    filterMode == 1 ? GL_LINEAR : GL_NEAREST);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                                    filterMode == 1 ? GL_LINEAR : GL_NEAREST);
 
-                    fprintf(stderr, "Filter switched to NEAREST\n");
+                    fprintf(stderr, "Filter switched to %s\n",
+                            filterMode == 1 ? "BILINEAR" : "NEAREST");
+
+                    char msg[64];
+                    snprintf(msg, sizeof(msg), "Filter mode: %s",
+                             filterMode == 1 ? "Bilinear" : "Nearest");
+                    show_toast(msg);
                 }
 
                 if (ks == XK_F2) {
-                    filterMode = 1;
+                    vita_index = (vita_index + 1) % vita_presets_count;
+                    vita_w = vita_presets_w[vita_index];
+                    vita_h = vita_presets_h[vita_index];
+
+                    fprintf(stderr, "F2 pressed: switching Vita capture to %ux%u\n", vita_w, vita_h);
+
+                    char msg[64];
+                    snprintf(msg, sizeof(msg), "Vita resolution: %up", vita_h);
+                    show_toast(msg);
+
+                    restart_v4l2(cam, fps, vita_w, vita_h, uv_w, uv_h);
 
                     glBindTexture(GL_TEXTURE_2D, texY);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                                    filterMode == 1 ? GL_LINEAR : GL_NEAREST);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                                    filterMode == 1 ? GL_LINEAR : GL_NEAREST);
+                    if (g_pi3_mode) {
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE,
+                                     cam.width, cam.height, 0,
+                                     GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
+                    } else {
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED_EXT,
+                                     cam.width, cam.height, 0,
+                                     GL_RED_EXT, GL_UNSIGNED_BYTE, NULL);
+                    }
 
                     glBindTexture(GL_TEXTURE_2D, texUV);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                                    filterMode == 1 ? GL_LINEAR : GL_NEAREST);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                                    filterMode == 1 ? GL_LINEAR : GL_NEAREST);
+                    if (g_pi3_mode) {
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA,
+                                     cam.width/2, cam.height/2, 0,
+                                     GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, NULL);
+                    } else {
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RG_EXT,
+                                     cam.width/2, cam.height/2, 0,
+                                     GL_RG_EXT, GL_UNSIGNED_BYTE, NULL);
+                    }
 
-                    fprintf(stderr, "Filter switched to BILINEAR\n");
+                    fprintf(stderr, "Capture restarted for %ux%u (cam reports %ux%u)\n",
+                            vita_w, vita_h, cam.width, cam.height);
+                }
+
+                if (ks == XK_F3) {
+                    fps = (fps == 30) ? 60 : 30;
+                    fprintf(stderr, "o pressed: switching FPS to %d\n", fps);
+
+                    char msg[64];
+                    snprintf(msg, sizeof(msg), "FPS mode: %d", fps);
+                    show_toast(msg);
+
+                    restart_v4l2(cam, fps, vita_w, vita_h, uv_w, uv_h);
+                }
+
+                if (ks == XK_F4) {
+                    rgbMode = (rgbMode == 0) ? 1 : 0;
+                    if (rgbMode == 1) {
+                        y_scale  = 255.0f / 219.0f;
+                        y_offset = -16.0f / 219.0f;
+                        uv_scale = 1.0f;
+                    } else {
+                        y_scale  = 1.0f;
+                        y_offset = 0.0f;
+                        uv_scale = 1.0f;
+                    }
+
+                    fprintf(stderr, "c pressed: RGB input set to %s\n",
+                            rgbMode == 1 ? "LIMITED" : "FULL");
+
+                    char msg[64];
+                    snprintf(msg, sizeof(msg), "Pre RGB mode: %s",
+                             rgbMode == 1 ? "Limited" : "Full");
+                    show_toast(msg);
+
+                    glUseProgram(progYUV);
+                    glUniform1f(locYScale,     y_scale);
+                    glUniform1f(locYOffset,    y_offset);
+                    glUniform1f(locUVScale,    uv_scale);
+                    glUniform1f(locPostScale,  post_scale);
+                    glUniform1f(locPostOffset, post_offset);
+                    glUniform1i(locPi3Mode,    g_pi3_mode ? 1 : 0);
+                }
+
+                if (ks == XK_F5) {
+                    postMode = (postMode == 0) ? 1 : 0;
+                    if (postMode == 1) {
+                        post_scale  = 219.0f / 255.0f;
+                        post_offset = 16.0f / 255.0f;
+                    } else {
+                        post_scale  = 1.0f;
+                        post_offset = 0.0f;
+                    }
+
+                    fprintf(stderr, "2 pressed: post output set to %s\n",
+                            postMode == 1 ? "LIMITED" : "FULL");
+
+                    char msg[64];
+                    snprintf(msg, sizeof(msg), "Post RGB mode: %s",
+                             postMode == 1 ? "Limited" : "Full");
+                    show_toast(msg);
+
+                    glUseProgram(progYUV);
+                    glUniform1f(locPostScale,  post_scale);
+                    glUniform1f(locPostOffset, post_offset);
+                    glUniform1f(locYScale,     y_scale);
+                    glUniform1f(locYOffset,    y_offset);
+                    glUniform1f(locUVScale,    uv_scale);
+                    glUniform1i(locPi3Mode,    g_pi3_mode ? 1 : 0);
                 }
 
                 if (ks == XK_Escape) {
@@ -803,6 +930,7 @@ int main(int argc, char** argv) {
             glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
             eglSwapBuffers(egl_dpy, surf);
+            draw_toast();
 
             restart_v4l2(cam, fps, vita_w, vita_h, uv_w, uv_h);
             continue;
@@ -815,6 +943,7 @@ int main(int argc, char** argv) {
             glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
             eglSwapBuffers(egl_dpy, surf);
+            draw_toast();
 
             restart_v4l2(cam, fps, vita_w, vita_h, uv_w, uv_h);
             continue;
@@ -827,174 +956,76 @@ int main(int argc, char** argv) {
             glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
             eglSwapBuffers(egl_dpy, surf);
+            draw_toast();
 
             restart_v4l2(cam, fps, vita_w, vita_h, uv_w, uv_h);
             continue;
         }
 
-        if (g_use_dmabuf) {
-            if (cam.dmabuf_fds[buf.index] < 0) {
-                fprintf(stderr, "Invalid DMA-BUF fd for buffer %u, restarting capture\n", buf.index);
+        uint8_t* base = cam.base[buf.index];
+        uint8_t* y_plane  = base;
+        uint8_t* uv_plane = base ? base + cam.y_stride * cam.height : nullptr;
 
-                glViewport(0, 0, screen_w, screen_h);
-                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-                glClear(GL_COLOR_BUFFER_BIT);
-                eglSwapBuffers(egl_dpy, surf);
-
-                restart_v4l2(cam, fps, vita_w, vita_h, uv_w, uv_h);
-                goto requeue;
-            }
-
-            int dma_fd = cam.dmabuf_fds[buf.index];
-
-            EGLint y_attrs[] = {
-                EGL_WIDTH,                  (EGLint)cam.width,
-                EGL_HEIGHT,                 (EGLint)cam.height,
-                EGL_LINUX_DRM_FOURCC_EXT,   DRM_FORMAT_R8,
-                EGL_DMA_BUF_PLANE0_FD_EXT,  dma_fd,
-                EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
-                EGL_DMA_BUF_PLANE0_PITCH_EXT,  (EGLint)cam.y_stride,
-                EGL_NONE
-            };
-
-            EGLint uv_offset = cam.y_stride * cam.height;
-            EGLint uv_attrs[] = {
-                EGL_WIDTH,                  (EGLint)uv_w,
-                EGL_HEIGHT,                 (EGLint)uv_h,
-                EGL_LINUX_DRM_FOURCC_EXT,   DRM_FORMAT_GR88,
-                EGL_DMA_BUF_PLANE0_FD_EXT,  dma_fd,
-                EGL_DMA_BUF_PLANE0_OFFSET_EXT, uv_offset,
-                EGL_DMA_BUF_PLANE0_PITCH_EXT,  (EGLint)cam.uv_stride,
-                EGL_NONE
-            };
-
-            EGLImageKHR imgY = eglCreateImageKHR_fn(
-                egl_dpy,
-                EGL_NO_CONTEXT,
-                EGL_LINUX_DMA_BUF_EXT,
-                (EGLClientBuffer)NULL,
-                y_attrs
-            );
-            EGLImageKHR imgUV = eglCreateImageKHR_fn(
-                egl_dpy,
-                EGL_NO_CONTEXT,
-                EGL_LINUX_DMA_BUF_EXT,
-                (EGLClientBuffer)NULL,
-                uv_attrs
-            );
-
-            if (imgY == EGL_NO_IMAGE_KHR || imgUV == EGL_NO_IMAGE_KHR) {
-                fprintf(stderr, "eglCreateImageKHR (DMA-BUF) failed, restarting capture\n");
-
-                if (imgY != EGL_NO_IMAGE_KHR) eglDestroyImageKHR_fn(egl_dpy, imgY);
-                if (imgUV != EGL_NO_IMAGE_KHR) eglDestroyImageKHR_fn(egl_dpy, imgUV);
-
-                glViewport(0, 0, screen_w, screen_h);
-                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-                glClear(GL_COLOR_BUFFER_BIT);
-                eglSwapBuffers(egl_dpy, surf);
-
-                restart_v4l2(cam, fps, vita_w, vita_h, uv_w, uv_h);
-                goto requeue;
-            }
-
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, texY);
-            glEGLImageTargetTexture2DOES_fn(GL_TEXTURE_2D, imgY);
-
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, texUV);
-            glEGLImageTargetTexture2DOES_fn(GL_TEXTURE_2D, imgUV);
+        if (!base) {
+            fprintf(stderr, "MMAP base pointer null for buffer %u, restarting capture\n", buf.index);
 
             glViewport(0, 0, screen_w, screen_h);
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
-
-            glUseProgram(progYUV);
-            glUniform1i(locY, 0);
-            glUniform1i(locUV, 1);
-
-            glUniform1f(locYScale,     y_scale);
-            glUniform1f(locYOffset,    y_offset);
-            glUniform1f(locUVScale,    uv_scale);
-            glUniform1f(locPostScale,  post_scale);
-            glUniform1f(locPostOffset, post_offset);
-            glUniform1i(locPi3Mode,    g_pi3_mode ? 1 : 0);
-
-            glEnableVertexAttribArray(0);
-            glEnableVertexAttribArray(1);
-            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), vertsYUV);
-            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), vertsYUV + 2);
-
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-
             eglSwapBuffers(egl_dpy, surf);
+            draw_toast();
 
-            eglDestroyImageKHR_fn(egl_dpy, imgY);
-            eglDestroyImageKHR_fn(egl_dpy, imgUV);
-        } else {
-            uint8_t* base = cam.base[buf.index];
-            if (!base) {
-                fprintf(stderr, "MMAP base pointer null for buffer %u, restarting capture\n", buf.index);
-
-                glViewport(0, 0, screen_w, screen_h);
-                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-                glClear(GL_COLOR_BUFFER_BIT);
-                eglSwapBuffers(egl_dpy, surf);
-
-                restart_v4l2(cam, fps, vita_w, vita_h, uv_w, uv_h);
-                goto requeue;
-            }
-
-            uint8_t* y_plane  = base;
-            uint8_t* uv_plane = base + cam.y_stride * cam.height;
-
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, texY);
-            if (g_pi3_mode) {
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
-                                cam.width, cam.height,
-                                GL_LUMINANCE, GL_UNSIGNED_BYTE, y_plane);
-            } else {
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
-                                cam.width, cam.height,
-                                GL_RED_EXT, GL_UNSIGNED_BYTE, y_plane);
-            }
-
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, texUV);
-            if (g_pi3_mode) {
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
-                                uv_w, uv_h,
-                                GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, uv_plane);
-            } else {
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
-                                uv_w, uv_h,
-                                GL_RG_EXT, GL_UNSIGNED_BYTE, uv_plane);
-            }
-
-            glViewport(0, 0, screen_w, screen_h);
-            glClear(GL_COLOR_BUFFER_BIT);
-
-            glUseProgram(progYUV);
-            glUniform1i(locY, 0);
-            glUniform1i(locUV, 1);
-
-            glUniform1f(locYScale,     y_scale);
-            glUniform1f(locYOffset,    y_offset);
-            glUniform1f(locUVScale,    uv_scale);
-            glUniform1f(locPostScale,  post_scale);
-            glUniform1f(locPostOffset, post_offset);
-            glUniform1i(locPi3Mode,    g_pi3_mode ? 1 : 0);
-
-            glEnableVertexAttribArray(0);
-            glEnableVertexAttribArray(1);
-            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), vertsYUV);
-            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), vertsYUV + 2);
-
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-
-            eglSwapBuffers(egl_dpy, surf);
+            restart_v4l2(cam, fps, vita_w, vita_h, uv_w, uv_h);
+            goto requeue;
         }
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texY);
+        if (g_pi3_mode) {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
+                            cam.width, cam.height,
+                            GL_LUMINANCE, GL_UNSIGNED_BYTE, y_plane);
+        } else {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
+                            cam.width, cam.height,
+                            GL_RED_EXT, GL_UNSIGNED_BYTE, y_plane);
+        }
+
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, texUV);
+        if (g_pi3_mode) {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
+                            uv_w, uv_h,
+                            GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, uv_plane);
+        } else {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
+                            uv_w, uv_h,
+                            GL_RG_EXT, GL_UNSIGNED_BYTE, uv_plane);
+        }
+
+        glViewport(0, 0, screen_w, screen_h);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glUseProgram(progYUV);
+        glUniform1i(locY, 0);
+        glUniform1i(locUV, 1);
+
+        glUniform1f(locYScale,     y_scale);
+        glUniform1f(locYOffset,    y_offset);
+        glUniform1f(locUVScale,    uv_scale);
+        glUniform1f(locPostScale,  post_scale);
+        glUniform1f(locPostOffset, post_offset);
+        glUniform1i(locPi3Mode,    g_pi3_mode ? 1 : 0);
+
+        glEnableVertexAttribArray(0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), vertsYUV);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), vertsYUV + 2);
+
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+        eglSwapBuffers(egl_dpy, surf);
+        draw_toast();
 
     requeue:
         if (ioctl(cam.fd, VIDIOC_QBUF, &buf) < 0) {
@@ -1005,13 +1036,13 @@ int main(int argc, char** argv) {
             glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
             eglSwapBuffers(egl_dpy, surf);
+            draw_toast();
 
             restart_v4l2(cam, fps, vita_w, vita_h, uv_w, uv_h);
             continue;
         }
     }
 
-    // Stop pw-loopback if we started it
     if (g_enable_audio && g_loopback_pid > 0) {
         kill(g_loopback_pid, SIGTERM);
         waitpid(g_loopback_pid, NULL, 0);
@@ -1019,15 +1050,10 @@ int main(int argc, char** argv) {
         g_loopback_pid = 0;
     }
 
-    // Cleanup V4L2
     enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     ioctl(cam.fd, VIDIOC_STREAMOFF, &type);
 
     for (uint32_t i = 0; i < cam.buf_count; ++i) {
-        if (cam.dmabuf_fds[i] >= 0) {
-            close(cam.dmabuf_fds[i]);
-            cam.dmabuf_fds[i] = -1;
-        }
         if (cam.base[i]) {
             munmap(cam.base[i], cam.buf_size[i]);
             cam.base[i]     = nullptr;
@@ -1040,7 +1066,6 @@ int main(int argc, char** argv) {
         cam.fd = -1;
     }
 
-    // Cleanup GL/EGL/X11
     glDeleteTextures(1, &texY);
     glDeleteTextures(1, &texUV);
     glDeleteProgram(progYUV);
@@ -1050,6 +1075,12 @@ int main(int argc, char** argv) {
     eglDestroyContext(egl_dpy, ctx);
     eglTerminate(egl_dpy);
 
+    if (g_toast_font) {
+        XFreeFont(dpy, g_toast_font);
+        g_toast_font = nullptr;
+    }
+
+    XFreeGC(dpy, gc);
     XDestroyWindow(dpy, win);
     XCloseDisplay(dpy);
 
