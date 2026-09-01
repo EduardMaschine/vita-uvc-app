@@ -97,11 +97,11 @@ Bilinear can help to smooth the edges. Possibly good for some games that feel a 
 ```
 --pi3bp
 ```
-~~This switch makes it possible for the software to run on a Pi 3B+. It changes the way things are handled under the hood. It forces MMAP instead of DMABUF. If you face any performance related issues, you might want to use that switch. You can also use that switch when executing the software on a Pi4 or Pi5.~~
+This switch makes it possible for the software to run on a Pi 3B+. It changes the way things are handled under the hood. It forces MMAP instead of DMABUF. If you face any performance related issues, you might want to use that switch. You can also use that switch when executing the software on a Pi4 or Pi5.
 
-~~**If nothing is provided** when executing, the default mode is "DMABUF", not the Pi 3B + supported "MMAP". So you have to actively provide that switch in order to make it run on a Pi 3B +.~~
+**If nothing is provided** when executing, the default mode is "DMABUF", not the Pi 3B + supported "MMAP". So you have to actively provide that switch in order to make it run on a Pi 3B +.
 >[!IMPORTANT]
-> As of version 2.5, this is now the default mode. DMA-BUF has been removed from the code, as there was no performance difference between both options except for that MMAP is working perfectly fine on Pi3B+.
+> As of version 2.6, this is now back again. We reverted back to v2.0 code wise and decided to keep this in since options are always good. It behaves the same again. Default is DMA-BUF, if you want MMAP use --pi3bp when executing the software.
 
 ## 7. Enable Audio over USB (v2.0+)
 This only works, if you are using the [VitaUSBStream plugin](https://github.com/BMK-Studio/VitaUSBStream) on your PSVita and if you are on [v2.0 or later of the vita-uvc-app](https://github.com/EduardMaschine/vita-uvc-app/releases).
@@ -110,8 +110,28 @@ This only works, if you are using the [VitaUSBStream plugin](https://github.com/
 ```
 This switch enables the audio output coming in via USB over to HDMI by executing a pw-loopback command.
 
+## 8. Enable / disable in-app VSync
+```
+--vsync-off
+--vsync-on
+```
+VSync was always present, now it can be toggled on and off. Yes, also when the app is running.
+>[!TIP]
+>**If nothing is provided** when executing, the default mode is "--vsync-on".
+
+>[!NOTE]
+>**Hotkey**: F6
+
 >[!TIP]
 >**If nothing is provided** when executing, audio is turned off. Make sure to execute the application using --audio.
+
+## 9. Banners
+<img width="2246" height="623" alt="Screenshot 2026-09-02 01-19-36" src="https://github.com/user-attachments/assets/66ee05ae-4ff1-4508-b6c6-02145c8b6608" />
+<img width="350" height="300" alt="45c29460f8f0ffb9d64d103336723cd8d5eedfab" src="https://github.com/user-attachments/assets/6b3868a9-dcd7-41d7-820f-827f4b3848e8" />
+
+You now know what mode you are in if you use one of the F-Keys (1-6).
+When in DMA-BUF mode, the banners cause slow downs. When they disappear, the app runs as it should again.
+MMAP does not have that issue. It's just a minor inconvinience.
 
 # Example execution
 ```
