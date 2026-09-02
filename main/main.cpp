@@ -921,8 +921,7 @@ int main(int argc, char** argv) {
         pid_t child = fork();
         if (child == 0) {
             // child process: run pw-loopback
-            execlp("pw-loopback", "pw-loopback", "-C", "73", "-P", "74", (char*)NULL);
-//            execlp("pw-loopback", "pw-loopback", "-C", "73", "-P", "74", "--capture-channel-map", "FL,FR", "--playback-channel-map", "FL,FR", (char*)NULL);
+            execlp("pw-loopback", "pw-loopback", (char*)NULL);
             _exit(127);
         } else if (child < 0) {
             fprintf(stderr, "Audio: fork pw-loopback failed (%d: %s)\n", errno, strerror(errno));
