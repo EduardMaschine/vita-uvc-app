@@ -146,8 +146,9 @@ You can freely change the values or leave switches out so the default modes take
 	- No issues so far
 	- Tested on 720p and 1080p
 * Raspberry Pi 4B
-	- No issues so far
-	- Performs just like on a Pi5
+	- Has issues holding 60fps at 4k
+		- either lower the resolution to 1080p on the pi, or switch to DMA-BUF. DMA-BUF runs slightly better, but can't hold 60fps at 272 reliable.
+    	- recommendation is to limit yourself to 30fps anyways, since there are not that much games supporting 60fps on vita and psp, and even if, uvc does not provide reliable 60fps currently except for 272p mode. better have reliable fps than juddery fps.
 	- Tested on 4k (2160p)
 * Raspberry Pi 5
 	- No issues so far
