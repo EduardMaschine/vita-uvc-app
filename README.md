@@ -110,6 +110,9 @@ This only works, if you are using the [VitaUSBStream plugin](https://github.com/
 ```
 This switch enables the audio output coming in via USB over to HDMI by executing a pw-loopback command.
 
+>[!TIP]
+>**If nothing is provided** when executing, audio is turned off. Make sure to execute the application using --audio.
+
 ## 8. Enable / disable in-app VSync
 ```
 --vsync-off
@@ -121,9 +124,6 @@ VSync was always present, now it can be toggled on and off. Yes, also when the a
 
 >[!NOTE]
 >**Hotkey**: F6
-
->[!TIP]
->**If nothing is provided** when executing, audio is turned off. Make sure to execute the application using --audio.
 
 ## 9. Banners
 <img width="2246" height="623" alt="Screenshot 2026-09-02 01-19-36" src="https://github.com/user-attachments/assets/66ee05ae-4ff1-4508-b6c6-02145c8b6608" />
