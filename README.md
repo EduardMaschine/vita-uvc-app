@@ -246,8 +246,10 @@ Make sure you enable lingering for the user running the systemd service
 ```
 sudo loginctl enable-linger <username>
 ```
+In this install case it is "pi". You can check the systemd service content in [step 6](https://github.com/EduardMaschine/vita-uvc-app#6-create-systemd-service). 
+>User=pi
 
-### For Desktop full Pi OS installations
+## For Desktop full Pi OS installations
 You basically copy over the binary file (vita-uvc-app), make it executable and double click it.
 If you use VitaUSBStream plugin on your Vita and want audio, run it from the terminal using --audio. If audio is not playing, install pipewire and crank the audio up using 
 ```
