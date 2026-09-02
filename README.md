@@ -241,6 +241,12 @@ If the volume level does not stay, you can make it persistent by creating your o
 or by configuring the labwc autostart config file (~/.config/labwc/autostart). If "autostart" does not exist, you can create it by using nano.
 Fill the file with the command above to set the volume level.
 
+### 9. If you face an issue where the app quits after you log out of a pi user session (ssh f.e.)
+Make sure you enable lingering for the user running the systemd service
+```
+sudo loginctl enable-linger <username>
+```
+
 ### For Desktop full Pi OS installations
 You basically copy over the binary file (vita-uvc-app), make it executable and double click it.
 If you use VitaUSBStream plugin on your Vita and want audio, run it from the terminal using --audio. If audio is not playing, install pipewire and crank the audio up using 
