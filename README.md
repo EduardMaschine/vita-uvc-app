@@ -264,6 +264,7 @@ Use this:
 g++ main.cpp -o vita_uvc_app -std=c++17 -lX11 -lEGL -lGLESv2
 ```
 I work exclusively on the Pi itself. The goal was not to install anything special, so a fresh and new installation of the latest Raspbian OS (lite) can compile and run it.
+Unfortunately, since the Audio feature, you need to install pipewire if you use Raspbian OS (lite), since it is only included in the Desktop version.
 
 # Known Issues
 ## 1. Slight frame loss (minimal stutter)
